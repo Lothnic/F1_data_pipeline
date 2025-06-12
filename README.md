@@ -67,4 +67,3 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - FastF1 project for the amazing F1 data API
 - Formula 1 for providing the data
-- All contributors who helped with this project
