@@ -1,10 +1,23 @@
-# Python-generated files
+# Python
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+uv/
+.uv/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+pip-log.txt
+pip-delete-this-arg.txt
+.history/
+.vscode/
+
+# Environment variables
+.env
 
 # Virtual environments
 .venv
@@ -13,3 +26,7 @@ wheels/
 f1_cache/
 *.ff1pkl
 *.sqlite
+
+# OS generated files
+.DS_Store
+Thumbs.db
