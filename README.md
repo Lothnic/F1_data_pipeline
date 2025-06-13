@@ -1,6 +1,6 @@
 # F1 Data Pipeline
 
-This project analyzes Formula 1 race data, focusing on driver performance metrics such as lap times and race positions.
+This ongoing project analyzes Formula 1 race data, focusing on driver performance metrics such as lap times and race positions.
 
 ## Features
 
@@ -12,17 +12,48 @@ This project analyzes Formula 1 race data, focusing on driver performance metric
 
 ## Setup
 
-1. Install Python 3.8 or higher
-2. Install required packages:
+This project uses [uv](https://github.com/astral-sh/uv) for package management and virtual environment management, providing faster and more reliable dependency management than traditional pip.
+
+### Prerequisites
+- Python 3.10 or higher
+- `uv` package manager
+
+### Installation
+
+1. Install `uv` (if not already installed):
    ```bash
-   pip install fastf1 matplotlib rich
+   curl -sSf https://astral.sh/uv/install.sh | sh
+   ```
+   For macOS/Linux:
+   ```bash
+   brew install astral-sh/uv/uv
+   ```
+
+2. Sync dependencies from pyproject.toml and uv.lock:
+
+   ```bash
+   uv venv  # Creates a virtual environment (optional, but recommended)
+
+   .venv\Scripts\activate # on Windows
+
+   source .venv/bin/activate  # on macOS/Linux
+
+   uv pip sync  # Installs exactly what’s in uv.lock
+
+   ```
+
+3. To add more packages:
+   ```bash
+   uv add <package_name>
    ```
 
 ## Usage
 
-Run the main script:
+### Create a folder 'f1_cache' for caching the data.
+
+### Run the main script:
 ```bash
-python main.py
+uv run main.py
 ```
 
 The script will:
