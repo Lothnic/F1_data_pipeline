@@ -2,6 +2,24 @@
 
 ## 🚀 Progress
 
+### 📅 June 14, 2024
+**🕒 9:00 AM - 5:00 PM**  
+- [ ] Worked on data extraction script
+- [ ] Implemented GCS upload functionality but had rate limit issues
+- [ ] Added error handling for API calls using time.sleep()
+
+**Technical Notes:**
+- Successfully extracted session data
+- Implemented batch processing for better performance
+
+**Blockers/Issues:**  
+⚠️ Rate limit issues
+
+**Next Steps:**
+- [ ] Test data transformation pipeline
+- [ ] Add data validation
+- [ ] Document the extraction process
+
 ### 📅 June 13, 2024
 **🕒 10:00 AM - 12:00 PM**  
 - [x] Initial setup of FastF1 library
