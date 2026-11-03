@@ -1,15 +1,21 @@
 [project]
 name = "f1"
 version = "0.1.0"
-description = "Add your description here"
+description = "Explore FastF1 race data and extract sessions to Parquet"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "boto3>=1.38.35",
     "fastf1>=3.5.3",
     "google-cloud-storage>=3.1.0",
+    "matplotlib>=3.10.3",
     "pandas>=2.3.0",
     "pyarrow>=20.0.0",
     "python-dotenv>=1.1.0",
     "rich>=14.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
 ]

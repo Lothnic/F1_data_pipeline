@@ -1,4 +1,4 @@
-import fastf1
-import pandas as pd
-import os
-import
+"""Placeholder for the unfinished raw ingestion DAG.
+
+No DAG is registered here yet. See the README before deploying to Airflow.
+"""

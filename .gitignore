@@ -30,3 +30,6 @@ f1_cache/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Local extraction output
+data/

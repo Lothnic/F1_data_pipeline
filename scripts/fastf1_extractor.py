@@ -1,123 +1,87 @@
-# scripts/fastf1_extractor.py
+"""Extract a FastF1 session into the raw Google Cloud Storage zone."""
 
-from __future__ import annotations # Good practice for type hints
-import fastf1
-import pandas as pd
+from __future__ import annotations
+
+import argparse
 import io
 import os
+from pathlib import Path
+
+import fastf1
+import pandas as pd
 from google.cloud import storage
-from rich import print
 
-# --- fastf1 Setup ---
-# Cache enabled locally on the Airflow worker. It's transient.
-fastf1.Cache.enable_cache('f1_cache')
-
-# --- Global GCS Client and Bucket (Initialized at runtime by _initialize_gcs_client_for_task) ---
-_storage_client: storage.Client | None = None
-_bucket: storage.Bucket | None = None
-_GCP_PROJECT_ID: str | None = None
-_GCS_BUCKET_NAME: str | None = None
-RAW_PREFIX = 'raw/fastf1/'
-
-def _initialize_gcs_client_for_task():
-    """
-    Initializes the GCS client and bucket instance for the current task.
-    This runs at task execution time within the Airflow worker.
-    """
-    global _storage_client, _bucket, _GCP_PROJECT_ID, _GCS_BUCKET_NAME
-
-    # In Composer, these env vars are typically set at the environment level,
-    # or you can use Airflow Connections.
-    _GCP_PROJECT_ID = os.getenv('GCP_PROJECT_ID')
-    _GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME')
-
-    if not _GCP_PROJECT_ID or not _GCS_BUCKET_NAME:
-        raise ValueError(
-            "GCP_PROJECT_ID or GCS_BUCKET_NAME environment variables are not set "
-            "in the Airflow environment. Please configure them in Composer."
-        )
-
-    try:
-        _storage_client = storage.Client(project=_GCP_PROJECT_ID)
-        _bucket = _storage_client.bucket(_GCS_BUCKET_NAME)
-        print(f"[bold green]Task execution: GCS bucket connected: gs://{_GCS_BUCKET_NAME}[/bold green]")
-    except Exception as e:
-        raise Exception(f"Failed to initialize GCS client or connect to bucket: {e}")
+RAW_PREFIX = "raw/fastf1"
 
 
-def _upload_dataframe_to_gcs_parquet(df: pd.DataFrame, gcs_path: str):
-    """
-    Uploads a Pandas DataFrame to Google Cloud Storage as a Parquet file.
-    Assumes _bucket is already initialized.
-    """
+def _parquet_buffer(df: pd.DataFrame) -> io.BytesIO:
+    """Serialize a frame with timedeltas represented as seconds."""
+    frame = df.copy()
+    for column in frame.select_dtypes(include=["timedelta"]).columns:
+        frame[column] = frame[column].dt.total_seconds()
+    frame.columns = frame.columns.astype(str)
+    buffer = io.BytesIO()
+    frame.to_parquet(buffer, index=False)
+    buffer.seek(0)
+    return buffer
+
+
+def _upload_dataframe_to_gcs_parquet(df: pd.DataFrame, bucket, path: str) -> bool:
     if df.empty:
-        print(f"[yellow]DataFrame for {gcs_path} is empty, skipping upload.[/yellow]")
         return False
-
-    df_to_save = df.copy()
-    for col in df_to_save.select_dtypes(include=['timedelta64[ns]']).columns:
-        df_to_save[col] = df_to_save[col].dt.total_seconds().fillna(-1)
-
-    df_to_save.columns = df_to_save.columns.astype(str)
-
-    parquet_buffer = io.BytesIO()
-    df_to_save.to_parquet(parquet_buffer, index=False)
-    parquet_buffer.seek(0)
-
-    blob = _bucket.blob(gcs_path)
-    try:
-        blob.upload_from_file(parquet_buffer, content_type='application/octet-stream')
-        print(f"[bold green]Uploaded gs://{_GCS_BUCKET_NAME}/{gcs_path}.[/bold green]")
-        return True
-    except Exception as e:
-        print(f"[red]Failed to upload gs://{_GCS_BUCKET_NAME}/{gcs_path}: {e}[/red]")
-        raise
+    bucket.blob(path).upload_from_file(_parquet_buffer(df), content_type="application/octet-stream")
+    return True
 
 
-def extract_and_save_f1_session_data(year: int, round_num: int, session_type: str):
+def extract_and_save_f1_session_data(year: int, round_num: int, session_type: str, output_dir: str | None = None):
+    """Load a session and upload available laps, results and weather data.
+
+    Existing objects at the same paths are overwritten on a repeat run.
     """
-    Extracts all main dataframes for a given F1 session and saves them to GCS raw zone.
-    This function is designed to be called by an Airflow PythonOperator.
-    """
-    # Initialize GCS client when the task function is called
-    _initialize_gcs_client_for_task()
+    project = os.getenv("GCP_PROJECT_ID")
+    bucket_name = os.getenv("GCS_BUCKET_NAME")
+    if not output_dir and (not project or not bucket_name):
+        raise ValueError("Set GCP_PROJECT_ID and GCS_BUCKET_NAME before running extraction.")
+    cache = Path(os.getenv("FASTF1_CACHE_DIR", "f1_cache"))
+    cache.mkdir(parents=True, exist_ok=True)
+    fastf1.Cache.enable_cache(str(cache))
+    bucket = None if output_dir else storage.Client(project=project).bucket(bucket_name)
+    session = fastf1.get_session(year, round_num, session_type)
+    session.load(laps=True, telemetry=False, weather=True, messages=False)
+    prefix = f"{RAW_PREFIX}/year={year}/round={round_num}/session_type={session_type}"
+    uploaded = []
+    for name in ("laps", "results", "weather_data"):
+        try:
+            frame = getattr(session, name, None)
+        except fastf1.core.DataNotLoadedError:
+            print(f"{name} was not loaded; skipping.")
+            continue
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        path = f"{prefix}/{name}.parquet"
+        if output_dir:
+            destination = Path(output_dir) / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(_parquet_buffer(frame).getvalue())
+        else:
+            _upload_dataframe_to_gcs_parquet(frame, bucket, path)
+        uploaded.append(name)
+    if not uploaded:
+        raise ValueError("The session did not contain any nonempty dataframes to upload.")
+    destination = output_dir if output_dir else f"gs://{bucket_name}"
+    print(f"Saved {', '.join(uploaded)} under {destination}/{prefix}/")
+    return uploaded
 
-    base_gcs_path = f"{RAW_PREFIX}year={year}/round={round_num}/session_type={session_type}/"
 
-    try:
-        session = fastf1.get_session(year, round_num, session_type)
-        print(f"[bold blue]Loading session data for {year} Round {round_num} ({session_type}): {session.event['EventName']}[/bold blue]")
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("year", type=int)
+    parser.add_argument("round", type=int, help="Championship round number")
+    parser.add_argument("session", help="FastF1 session identifier, e.g. R or Q")
+    parser.add_argument("--output-dir", help="Write Parquet locally instead of uploading to GCS")
+    args = parser.parse_args()
+    extract_and_save_f1_session_data(args.year, args.round, args.session, args.output_dir)
 
-        session.load(laps=True, results=True, weather=True, messages=False,
-                     full_team_info=False, full_race_results=False,
-                     telemetry=False, car_data=False)
 
-        dataframes_to_save = {}
-        session_dfs = [
-            'laps', 'results', 'drivers', 'constructors', 'weather_data',
-        ]
-        for df_attr in session_dfs:
-            if hasattr(session, df_attr) and isinstance(getattr(session, df_attr), pd.DataFrame):
-                dataframes_to_save[df_attr] = getattr(session, df_attr)
-            elif hasattr(session, df_attr) and getattr(session, df_attr) is None:
-                print(f"[yellow]Session attribute '{df_attr}' is None for {year} R{round_num} {session_type}, skipping.[/yellow]")
-            else:
-                 print(f"[yellow]Session attribute '{df_attr}' not a DataFrame or missing for {year} R{round_num} {session_type}, skipping.[/yellow]")
-
-        if not dataframes_to_save:
-            raise ValueError(f"No valid dataframes found to save for {year} R{round_num} {session_type}.")
-
-        all_uploaded = True
-        for df_name, df_obj in dataframes_to_save.items():
-            success = _upload_dataframe_to_gcs_parquet(df_obj, f"{base_gcs_path}{df_name}.parquet")
-            if not success:
-                all_uploaded = False
-
-        if not all_uploaded:
-            raise ValueError(f"Not all dataframes uploaded successfully for {year} R{round_num} {session_type}")
-
-        print(f"[bold green]Finished extracting and saving to raw GCS for {year} R{round_num} {session_type}.[/bold green]")
-        return True
-    except Exception as e:
-        print(f"[bold red]Critical error in F1 data extraction task for {year} R{round_num} {session_type}: {e}[/bold red]")
-        raise
+if __name__ == "__main__":
+    main()

@@ -1,100 +1,66 @@
 # F1 Data Pipeline
 
-This ongoing project analyzes Formula 1 race data, focusing on driver performance metrics such as lap times and race positions.
+An early-stage Formula 1 data project using [FastF1](https://docs.fastf1.dev/). It contains a local fastest-lap plot and a session extractor that writes Parquet files to Google Cloud Storage (GCS).
 
-## Features
+## Project status
 
-- Analyzes fastest lap times for multiple drivers across races
-- Visualizes performance data using scatter plots
-- Supports multiple drivers (currently tracking VER, PIA, and NOR)
-- Uses FastF1 library for data retrieval and analysis
-- Implements caching for efficient data handling
+This is a prototype, not a complete automated pipeline. The raw ingestion DAG is a placeholder and does not schedule extraction. The hello-world DAG is only an Airflow connectivity example. Files in `tempfiles/` are historical experiments and are not supported. There is no transformation layer, dashboard, deployment configuration, or production monitoring yet.
 
-## Setup
+## Getting started
 
-This project uses [uv](https://github.com/astral-sh/uv) for package management and virtual environment management, providing faster and more reliable dependency management than traditional pip.
+Requirements: Python 3.10 or later, [uv](https://docs.astral.sh/uv/getting-started/installation/), and internet access. From the repository root:
 
-### Prerequisites
-- Python 3.10 or higher
-- `uv` package manager
-
-### Installation
-
-1. Install `uv` (if not already installed):
-   ```bash
-   curl -sSf https://astral.sh/uv/install.sh | sh
-   ```
-   For macOS/Linux:
-   ```bash
-   brew install astral-sh/uv/uv
-   ```
-
-2. Sync dependencies from pyproject.toml and uv.lock:
-
-   ```bash
-   uv venv  # Creates a virtual environment (optional, but recommended)
-
-   .venv\Scripts\activate # on Windows
-
-   source .venv/bin/activate  # on macOS/Linux
-
-   uv pip sync  # Installs exactly what’s in uv.lock
-
-   ```
-
-3. To add more packages:
-   ```bash
-   uv add <package_name>
-   ```
-
-## Usage
-
-### Create a folder 'f1_cache' for caching the data.
-
-### Run the main script:
 ```bash
-uv run main.py
+uv sync --locked
+uv run main.py --year 2024 --drivers VER PIA NOR --output fastest-laps.png
 ```
 
-The script will:
-1. Load race data for the specified drivers
-2. Calculate fastest lap times for each race
-3. Generate a scatter plot comparing driver performances
+Add `--round 1` to process a single round. Omit `--output` to display the chart in a desktop window. The script loads race sessions for the season and plots each driver's fastest lap time against its lap number; it skips sessions it cannot load. The first run can take time and download substantial data. FastF1's cache is created in `f1_cache/` automatically. The chart is exploratory: times across different circuits are not directly comparable.
 
-## Project Structure
+## Test extraction locally
 
-- `main.py`: Main script containing analysis logic
-- `f1_cache/`: Directory for storing cached race data
-- `.gitignore`: Configuration to ignore cache files
+Write available session data to local Parquet files without GCS credentials:
 
-## Dependencies
+```bash
+uv run python -m scripts.fastf1_extractor 2024 1 R --output-dir ./data
+```
 
-- fastf1: For F1 data retrieval and analysis
-- matplotlib: For data visualization
-- rich: For enhanced console output
-- pymongo: For cache management
+The command reports which datasets were saved. FastF1 can return only partial data when an upstream source is unavailable, so check that the datasets you need were produced. The `data/` directory can grow large and is ignored by Git.
 
-## Data Sources
+## Extract a session to GCS
 
-The project uses official F1 data through the FastF1 API, which provides:
-- Race lap times
-- Driver positions
-- Session information
-- Weather data
+Create a GCS bucket and configure [Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc) for an identity with permission to write objects. Set the project and bucket names in your shell, then run:
 
-## Contributing
+```bash
+export GCP_PROJECT_ID="your-project-id"
+export GCS_BUCKET_NAME="your-bucket-name"
+uv run python -m scripts.fastf1_extractor 2024 1 R
+```
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+The positional arguments are year, championship round, and FastF1 session identifier (for example `R` for race or `Q` for qualifying). The extractor loads laps, results and weather when available, skips empty or unavailable datasets, and fails if none are available. Objects are written to:
 
-## License
+```text
+raw/fastf1/year=2024/round=1/session_type=R/{laps,results,weather_data}.parquet
+```
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+Only available, nonempty datasets are written. Timedeltas are stored as seconds, with missing values retained as nulls. Re-running the same session overwrites objects that are uploaded; it does not delete older objects for datasets that are now empty. A failed run may leave a partial set of objects. Set `FASTF1_CACHE_DIR` to change the extractor's cache location. Cloud usage and API access may incur costs.
 
-## Acknowledgments
+The extractor function can be called from an Airflow task, but deploying and scheduling it in Airflow/Cloud Composer, including making the module and dependencies available to workers, is still work to be done. The local dependencies do not install Airflow.
 
-- FastF1 project for the amazing F1 data API
-- Formula 1 for providing the data
+## Tests
+
+```bash
+uv run python -m pytest
+```
+
+The tests use mocked FastF1 and GCS clients; they do not verify access to real sessions or cloud resources. Use the local extraction command above for a live smoke test.
+
+## Files
+
+- `main.py`: local plotting script.
+- `scripts/fastf1_extractor.py`: session extraction and GCS upload.
+- `dags/`: a placeholder for ingestion and an Airflow hello-world example.
+- `test/`: offline extractor tests.
+- `dailylog.md` and `tempfiles/`: historical notes and experiments.
+
+FastF1 is an independent project; consult its documentation for data availability and usage conditions. No license has been specified for this repository; obtain permission from the owner before redistributing or reusing it.
