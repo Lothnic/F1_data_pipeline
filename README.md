@@ -1,35 +1,53 @@
-# F1 Data Pipeline
+# F1 Data Pipeline & Race Outcome Analysis
 
-An early-stage Formula 1 data project using [FastF1](https://docs.fastf1.dev/). It contains a local fastest-lap plot and a session extractor that writes Parquet files to Google Cloud Storage (GCS).
+A reproducible data science project exploring how starting position, driver and constructor relate to Formula 1 race classification. Includes source caching, validation, descriptive analysis, a chronological prediction experiment, Parquet storage and an optional GCS/Airflow ingestion path.
 
-## Project status
+## Run the analysis
 
-This is a prototype, not a complete automated pipeline. The raw ingestion DAG is a placeholder and does not schedule extraction. The hello-world DAG is only an Airflow connectivity example. Files in `tempfiles/` are historical experiments and are not supported. There is no transformation layer, dashboard, deployment configuration, or production monitoring yet.
-
-## Getting started
-
-Requirements: Python 3.10 or later, [uv](https://docs.astral.sh/uv/getting-started/installation/), and internet access. From the repository root:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use Python 3.10 or later:
 
 ```bash
 uv sync --locked
-uv run main.py --year 2024 --drivers VER PIA NOR --output fastest-laps.png
+uv run python -m f1_pipeline.analysis --year 2024
+uv run python -m pytest
 ```
 
-Add `--round 1` to process a single round. Omit `--output` to display the chart in a desktop window. The script loads race sessions for the season and plots each driver's fastest lap time against its lap number; it skips sessions it cannot load. The first run can take time and download substantial data. FastF1's cache is created in `f1_cache/` automatically. The chart is exploratory: times across different circuits are not directly comparable.
+The first analysis run requires internet access. Source JSON is cached in `data/source/`. Subsequent runs can use that cache. Delete the season's cached files to refresh. Outputs in `data/analysis/`:
 
-## Test extraction locally
+- `analysis.png`: top drivers by race points and holdout prediction plot.
+- `results.parquet`: validated race results.
+- `driver_summary.csv`: race points and average classified position.
+- `holdout_predictions.csv`: individual model and baseline predictions.
+- `metrics.json`: train/test rounds, row counts and errors.
 
-Write available session data to local Parquet files without GCS credentials:
+To analyze a previously exported results CSV:
 
 ```bash
-uv run python -m scripts.fastf1_extractor 2024 1 R --output-dir ./data
+uv run python -m f1_pipeline.analysis --input results.csv --output data/custom
 ```
 
-The command reports which datasets were saved. FastF1 can return only partial data when an upstream source is unavailable, so check that the datasets you need were produced. The `data/` directory can grow large and is ignored by Git.
+CSV columns: `round,race,driver,constructor,grid,position,points,status`. Use numeric rounds, grid, position and points. The validator rejects missing data, duplicate driver-round entries and invalid numeric values. Use one season per input; combining seasons would create duplicate round identities.
 
-## Extract a session to GCS
+## Verified experiment
 
-Create a GCS bucket and configure [Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc) for an identity with permission to write objects. Set the project and bucket names in your shell, then run:
+A live 2024 run returned 479 race entries. The first 18 rounds (359 entries) were used for training; the final six rounds (120 entries) were held out:
+
+| Method | Holdout MAE, finishing positions |
+| --- | ---: |
+| Predict starting grid | 3.60 |
+| Ridge regression | 3.13 |
+
+Lower is better. This is one season and one holdout, not evidence of performance across seasons. No hyperparameter search was conducted. Read [methodology](docs/METHODOLOGY.md) for assumptions, limitations and interview discussion points.
+
+## FastF1 session extraction
+
+For detailed laps/results/weather, write available datasets locally:
+
+```bash
+uv run python -m scripts.fastf1_extractor 2024 1 R --output-dir data/raw
+```
+
+For GCS, configure [Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc) with object-write permission, then:
 
 ```bash
 export GCP_PROJECT_ID="your-project-id"
@@ -37,30 +55,24 @@ export GCS_BUCKET_NAME="your-bucket-name"
 uv run python -m scripts.fastf1_extractor 2024 1 R
 ```
 
-The positional arguments are year, championship round, and FastF1 session identifier (for example `R` for race or `Q` for qualifying). The extractor loads laps, results and weather when available, skips empty or unavailable datasets, and fails if none are available. Objects are written to:
+Files use `raw/fastf1/year=2024/round=1/session_type=R/` partitions. Timedeltas become seconds and missing values remain null. Empty or unavailable datasets are skipped and saved datasets are reported. Runs fail if none are available. Re-runs overwrite individual files; writes are not atomic across datasets and older files are not deleted. A partial extraction is not a complete session.
 
-```text
-raw/fastf1/year=2024/round=1/session_type=R/{laps,results,weather_data}.parquet
-```
+Live timing requests returned HTTP 401 in the development environment. Results were still available through the fallback service. The analysis command above uses the working Jolpica results API directly, without requiring lap timing. Authentication restrictions cannot be repaired by changing local parsing code.
 
-Only available, nonempty datasets are written. Timedeltas are stored as seconds, with missing values retained as nulls. Re-running the same session overwrites objects that are uploaded; it does not delete older objects for datasets that are now empty. A failed run may leave a partial set of objects. Set `FASTF1_CACHE_DIR` to change the extractor's cache location. Cloud usage and API access may incur costs.
-
-The extractor function can be called from an Airflow task, but deploying and scheduling it in Airflow/Cloud Composer, including making the module and dependencies available to workers, is still work to be done. The local dependencies do not install Airflow.
-
-## Tests
+## Optional fastest-lap plot
 
 ```bash
-uv run python -m pytest
+uv run main.py --year 2024 --round 1 --drivers VER PIA NOR --output fastest-laps.png
 ```
 
-The tests use mocked FastF1 and GCS clients; they do not verify access to real sessions or cloud resources. Use the local extraction command above for a live smoke test.
+Requires working FastF1 lap access. Omit `--round` for a season, or `--output` for a desktop window. The chart shows fastest lap time against lap number; times from different circuits are not directly comparable.
 
-## Files
+## Airflow deployment
 
-- `main.py`: local plotting script.
-- `scripts/fastf1_extractor.py`: session extraction and GCS upload.
-- `dags/`: a placeholder for ingestion and an Airflow hello-world example.
-- `test/`: offline extractor tests.
-- `dailylog.md` and `tempfiles/`: historical notes and experiments.
+`dags/f1_raw_ingestion_dag.py` defines an Airflow 2.x DAG with manual year/round/session parameters, two retries and one active run. Deploy the DAG to a separately provisioned Airflow environment; install the runtime dependencies and make the repository root importable on every worker. Configure GCS credentials and environment variables there. Trigger `f1_raw_ingestion` manually. Airflow is not installed in the local analysis environment; this DAG has not been integration-tested on Composer. The hello-world DAG is a separate connectivity example.
 
-FastF1 is an independent project; consult its documentation for data availability and usage conditions. No license has been specified for this repository; obtain permission from the owner before redistributing or reusing it.
+## Layout and verification
+
+`f1_pipeline/` contains the analysis; `scripts/` handles raw extraction; `test/` has offline tests for serialization, missing datasets, quality rules, chronological splitting and exclusion of post-race points from model features. GitHub Actions runs the tests on pushes and pull requests. Historical experiments in `tempfiles/` and `dailylog.md` are not part of the supported workflow.
+
+Data comes from [Jolpica](https://github.com/jolpica/jolpica-f1) and [FastF1](https://docs.fastf1.dev/). Follow their access and usage terms. No license has been selected for this repository; contact its owner before reusing or redistributing the code.
