@@ -1,0 +1,9 @@
+{
+  "retrieved_at_utc": "2026-11-03T10:20:40.220314+00:00",
+  "first_season": 1950,
+  "last_season": 2026,
+  "races": 1168,
+  "entries": 26291,
+  "latest_round": 19,
+  "source": "Jolpica bulk CSV archive plus refreshed latest-season API results; historical cache may predate this run"
+}

@@ -8,15 +8,19 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use Py
 
 ```bash
 uv sync --locked
-uv run python -m f1_pipeline.analysis --year 2024
+uv run python -m f1_pipeline.analysis
 uv run python -m pytest
 ```
 
-The first analysis run requires internet access. Source JSON is cached in `data/source/`. Subsequent runs can use that cache. Delete the season's cached files to refresh. Outputs in `data/analysis/`:
+By default the analysis fetches every season from 1950 through the latest season reported by Jolpica. Only published race results are included; future races are excluded. Use `--year 2024` for one season or `--start-year 2018 --end-year 2026` for a range. The latest selected season is refreshed on every API run; use `--refresh` to refresh the bulk archive or historical API pages too.
+
+The first full-history run requires internet access. It downloads Jolpica’s public delayed bulk CSV archive, normalizes the relational tables, and replaces the latest selected season with fresh API results. The archive and source JSON are cached in `data/source/`. Use `--source api` for the slower paginated-only path. Subsequent runs can use that cache. Delete the season's cached files to refresh. Outputs in `data/analysis/`:
 
 - `analysis.png`: top drivers by race points and holdout prediction plot.
 - `results.parquet`: validated race results.
-- `driver_summary.csv`: race points and average classified position.
+- `driver_summary.csv`: race points and average classified position per season and driver.
+- `season_coverage.csv`: race and entry counts for each season.
+- `manifest.json`: run time, coverage and latest included round.
 - `holdout_predictions.csv`: individual model and baseline predictions.
 - `metrics.json`: train/test rounds, row counts and errors.
 
@@ -26,9 +30,17 @@ To analyze a previously exported results CSV:
 uv run python -m f1_pipeline.analysis --input results.csv --output data/custom
 ```
 
-CSV columns: `round,race,driver,constructor,grid,position,points,status`. Use numeric rounds, grid, position and points. The validator rejects missing data, duplicate driver-round entries and invalid numeric values. Use one season per input; combining seasons would create duplicate round identities.
+CSV columns: `season,round,race,driver,constructor,grid,position,points,status`. Use numeric rounds, grid, position and points. The validator rejects missing data, duplicate season-round-driver-position entries and invalid numeric values. Season and round together identify a race. Historic shared drives can give one driver more than one classified entry; these entries are preserved, with position included in the uniqueness key.
 
-## Verified experiment
+## Verified full-history run
+
+The 1950–2026 run includes **1,168 races and 26,291 classified result entries**, through 2026 round 19 (Mexico City, November 1). Future events and entries without a classified position in the archive are excluded. The full-history holdout produced MAE **4.07** for ridge regression versus **3.77** for the grid baseline: the baseline performs better. This exposes the weakness of fitting fixed driver and team effects over many eras. The coverage manifest is the authority for each run.
+
+![Latest-season points and full-history holdout](reports/analysis.png)
+
+See `reports/season_coverage.csv` and `reports/manifest.json` for the verified snapshot.
+
+## Reference single-season experiment
 
 A live 2024 run returned 479 race entries. The first 18 rounds (359 entries) were used for training; the final six rounds (120 entries) were held out:
 
@@ -36,6 +48,8 @@ A live 2024 run returned 479 race entries. The first 18 rounds (359 entries) wer
 | --- | ---: |
 | Predict starting grid | 3.60 |
 | Ridge regression | 3.13 |
+
+The full-history command evaluates on the last quarter of season-round event keys and reports its own metrics. The chart shows points for the latest included season; cumulative points across eras are not comparable because scoring systems changed.
 
 Lower is better. This is one season and one holdout, not evidence of performance across seasons. No hyperparameter search was conducted. Read [methodology](docs/METHODOLOGY.md) for assumptions, limitations and interview discussion points.
 
